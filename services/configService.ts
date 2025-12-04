@@ -33,7 +33,7 @@ export interface SystemLog {
 const getEnvApiKey = () => {
   try {
     // Check if process is defined (Node.js/simulated env) before accessing env
-    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+    if (typeof process !== 'undefined' && process && process.env && process.env.API_KEY) {
       return process.env.API_KEY;
     }
     return '';
@@ -76,7 +76,29 @@ class ConfigService {
         console.warn("LocalStorage access failed");
     }
 
-    this.providers = storedProviders ? JSON.parse(storedProviders) : DEFAULT_PROVIDERS;
+    // Merge defaults with stored to ensure Env Key is always present if reset
+    const defaults = DEFAULT_PROVIDERS;
+    
+    if (storedProviders) {
+        try {
+            const parsed = JSON.parse(storedProviders);
+            // If the default provider exists in storage but has no key, try to inject env key
+            const defaultInStore = parsed.find((p: AIProvider) => p.id === 'default-gemini');
+            if (defaultInStore && !defaultInStore.apiKey) {
+                defaultInStore.apiKey = getEnvApiKey();
+            }
+            // If default provider is missing entirely from store, add it
+            if (!defaultInStore) {
+                parsed.push(defaults[0]);
+            }
+            this.providers = parsed;
+        } catch (e) {
+            this.providers = defaults;
+        }
+    } else {
+        this.providers = defaults;
+    }
+
     this.users = MOCK_USERS; // Mock for demo
     this.logs = [];
     this.logAction('System', 'ConfigService initialized');
