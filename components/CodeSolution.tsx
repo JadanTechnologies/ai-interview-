@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { Copy, Check } from 'lucide-react';
 
@@ -8,7 +8,7 @@ interface CodeSolutionProps {
 }
 
 export const CodeSolution: React.FC<CodeSolutionProps> = ({ code, language }) => {
-  const [copied, setCopied] = React.useState(false);
+  const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
