@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Mic, Square, Monitor } from 'lucide-react';
+import { Mic, Square, Monitor, AlertTriangle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { geminiService } from '../services/geminiService';
 import { ResumeData, InterviewSettings, MessageType, ChatMessage } from '../types';
@@ -168,7 +168,17 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
 
     } catch (err: any) {
       console.error(err);
-      setError("Failed to access microphone or connect to AI. " + err.message);
+      
+      let msg = err.message;
+      // Handle microphone permission errors specifically
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          msg = "Microphone access denied. Please allow microphone access in your browser settings.";
+      } else if (err.name === 'NotFoundError') {
+          msg = "No microphone found on this device.";
+      }
+      
+      setError(msg);
+      stopSession(); // Ensure cleanup happens
     }
   };
 
@@ -205,8 +215,8 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
         try {
             const ans = await geminiService.generateContextualAnswer(q, resume, settings);
             addMessage(ans, MessageType.AI);
-        } catch(e) {
-            addMessage("Error generating detailed text response.", MessageType.SYSTEM);
+        } catch(e: any) {
+            addMessage(`System: ${e.message}`, MessageType.SYSTEM);
         } finally {
             setIsGeneratingText(false);
         }
@@ -302,7 +312,8 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
 
       {/* Error Display */}
       {error && (
-        <div className="bg-red-900/50 text-red-200 px-4 py-2 text-center text-sm">
+        <div className="bg-red-500/10 border-t border-red-500/20 p-3 flex items-center justify-center gap-2 text-red-400 text-sm animate-in slide-in-from-bottom-2">
+          <AlertTriangle className="w-4 h-4" />
           {error}
         </div>
       )}

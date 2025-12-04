@@ -6,6 +6,45 @@ import { configService } from "./configService";
 export class GeminiService {
   private textModelId = 'gemini-2.5-flash';
 
+  // Helper to format errors into user-friendly messages
+  private formatError(error: any): string {
+    let msg = error instanceof Error ? error.message : String(error);
+    const lowerMsg = msg.toLowerCase();
+
+    // Rate Limits / Quota
+    if (lowerMsg.includes('429') || lowerMsg.includes('quota') || lowerMsg.includes('resource exhausted')) {
+      return "⚠️ API Rate limit exceeded. Please try again later or check your quota.";
+    }
+    
+    // Authentication
+    if (lowerMsg.includes('401') || lowerMsg.includes('403') || lowerMsg.includes('api key') || lowerMsg.includes('permission denied')) {
+      return "⚠️ Authentication failed. Please check your API Key configuration.";
+    }
+    
+    // Server Errors
+    if (lowerMsg.includes('500') || lowerMsg.includes('502') || lowerMsg.includes('503') || lowerMsg.includes('internal error') || lowerMsg.includes('overloaded')) {
+      return "⚠️ AI Service is temporarily unavailable. Please try again in a moment.";
+    }
+    
+    // Network / Offline
+    if (lowerMsg.includes('fetch failed') || lowerMsg.includes('network') || lowerMsg.includes('failed to fetch')) {
+      return "⚠️ Network connection error. Please check your internet connection.";
+    }
+
+    // Safety / Blocked
+    if (lowerMsg.includes('safety') || lowerMsg.includes('blocked') || lowerMsg.includes('finishreason')) {
+      return "⚠️ Response was blocked by safety settings. Please modify your request.";
+    }
+
+    // Internal "No providers" error
+    if (msg.includes("No active AI providers")) {
+        return msg;
+    }
+
+    // Default cleanup
+    return msg.replace(/\[.*?\]/g, '').trim() || "An unexpected error occurred.";
+  }
+
   // Helper to get a working client with failover
   private async getClient(): Promise<{ client: GoogleGenAI, modelId: string }> {
     const providers = configService.getActiveProviders();
@@ -28,98 +67,106 @@ export class GeminiService {
   }
 
   async parseResume(file: File): Promise<ResumeData> {
-    const { client } = await this.getClient();
-    const base64Data = await fileToBase64(file);
-    const mimeType = file.type;
-
-    const prompt = `
-      Analyze the provided resume document.
-      Extract the following information in strict JSON format:
-      1. Full text summary of the resume.
-      2. A list of key technical skills.
-      
-      Output format:
-      {
-        "text": "Full summary text...",
-        "skills": ["Skill 1", "Skill 2"]
-      }
-    `;
-
     try {
-      const response = await client.models.generateContent({
-        model: this.textModelId,
-        contents: {
-          parts: [
-            { inlineData: { mimeType, data: base64Data } },
-            { text: prompt }
-          ]
-        },
-        config: {
-          responseMimeType: 'application/json'
+        const { client } = await this.getClient();
+        const base64Data = await fileToBase64(file);
+        const mimeType = file.type;
+
+        const prompt = `
+          Analyze the provided resume document.
+          Extract the following information in strict JSON format:
+          1. Full text summary of the resume.
+          2. A list of key technical skills.
+          
+          Output format:
+          {
+            "text": "Full summary text...",
+            "skills": ["Skill 1", "Skill 2"]
+          }
+        `;
+
+        const response = await client.models.generateContent({
+            model: this.textModelId,
+            contents: {
+            parts: [
+                { inlineData: { mimeType, data: base64Data } },
+                { text: prompt }
+            ]
+            },
+            config: {
+            responseMimeType: 'application/json'
+            }
+        });
+
+        let text = response.text;
+        if (!text) throw new Error("Received empty response from Gemini");
+        
+        // Sanitize markdown code blocks if present
+        text = text.replace(/```json/g, '').replace(/```/g, '');
+
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+        } catch (e) {
+            console.error("Failed to parse JSON", text);
+            throw new Error("Failed to parse AI response. Please ensure the document is clear.");
         }
-      });
 
-      let text = response.text;
-      if (!text) throw new Error("No response from Gemini");
-      
-      // Sanitize markdown code blocks if present
-      text = text.replace(/```json/g, '').replace(/```/g, '');
+        configService.logAction('AI', 'Resume parsed successfully');
 
-      let parsed;
-      try {
-        parsed = JSON.parse(text);
-      } catch (e) {
-        console.error("Failed to parse JSON", text);
-        throw new Error("Invalid response format from AI");
-      }
-
-      configService.logAction('AI', 'Resume parsed successfully');
-
-      return {
-        text: parsed.text || "No summary available.",
-        skills: Array.isArray(parsed.skills) ? parsed.skills : [],
-        fileName: file.name
-      };
+        return {
+            text: parsed.text || "No summary available.",
+            skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+            fileName: file.name
+        };
     } catch (error: any) {
-      configService.logAction('AI', `Resume parsing failed: ${error.message}`, 'error');
+      const userMsg = this.formatError(error);
+      configService.logAction('AI', `Resume parsing failed: ${userMsg}`, 'error');
       console.error("Resume parsing failed:", error);
-      throw error;
+      throw new Error(userMsg);
     }
   }
 
   async generateContextualAnswer(question: string, resume: ResumeData, settings: InterviewSettings): Promise<string> {
-    const { client } = await this.getClient();
+    try {
+        const { client } = await this.getClient();
 
-    const prompt = `
-      You are an expert interview assistant helping a candidate.
-      
-      Candidate Context (Resume):
-      ${resume.text}
-      
-      Candidate Skills:
-      ${resume.skills.join(', ')}
-      
-      Target Role: ${settings.targetRole}
-      Mode: ${settings.mode}
-      Coding Language: ${settings.codingLanguage}
+        const prompt = `
+          You are an expert interview assistant helping a candidate.
+          
+          Candidate Context (Resume):
+          ${resume.text}
+          
+          Candidate Skills:
+          ${resume.skills.join(', ')}
+          
+          Target Role: ${settings.targetRole}
+          Mode: ${settings.mode}
+          Coding Language: ${settings.codingLanguage}
 
-      Question: "${question}"
+          Question: "${question}"
 
-      Provide a structured response:
-      1. A short, direct answer (punchy, confident).
-      2. A detailed explanation with examples from the resume context if applicable.
-      3. If this is a coding question, provide a ${settings.codingLanguage} solution with time/space complexity.
-      
-      Format with Markdown.
-    `;
+          Provide a structured response:
+          1. A short, direct answer (punchy, confident).
+          2. A detailed explanation with examples from the resume context if applicable.
+          3. If this is a coding question, provide a ${settings.codingLanguage} solution with time/space complexity.
+          
+          Format with Markdown.
+        `;
 
-    const response = await client.models.generateContent({
-      model: this.textModelId,
-      contents: prompt
-    });
+        const response = await client.models.generateContent({
+          model: this.textModelId,
+          contents: prompt
+        });
 
-    configService.logAction('AI', 'Generated contextual answer');
-    return response.text || "Could not generate answer.";
+        configService.logAction('AI', 'Generated contextual answer');
+        return response.text || "Could not generate answer.";
+        
+    } catch (error: any) {
+        const userMsg = this.formatError(error);
+        configService.logAction('AI', `Answer generation failed: ${userMsg}`, 'error');
+        throw new Error(userMsg);
+    }
   }
 
   // Live API Connection Manager
@@ -138,22 +185,23 @@ export class GeminiService {
     disconnect: () => void;
   }> {
     
-    const { client, modelId } = await this.getClient();
-
-    let systemInstruction = `
-      You are SmartInterview AI, a real-time interview copilot. 
-      Your goal is to listen to the interview (user and interviewer) and help the user answer questions.
-      Keep your responses concise and textual where possible, but you can speak if needed.
-    `;
-
-    if (resumeContext) {
-      systemInstruction += `\n\nUser Resume Context:\n${resumeContext.text}\nSkills: ${resumeContext.skills.join(', ')}`;
-    }
-    
-    systemInstruction += `\n\nFocus on ${settings.mode} questions for a ${settings.targetRole} role. Preferred language: ${settings.codingLanguage}.`;
-
+    // We get client inside the promise to handle async errors in the rejection
     return new Promise(async (resolve, reject) => {
       try {
+        const { client, modelId } = await this.getClient();
+
+        let systemInstruction = `
+          You are SmartInterview AI, a real-time interview copilot. 
+          Your goal is to listen to the interview (user and interviewer) and help the user answer questions.
+          Keep your responses concise and textual where possible, but you can speak if needed.
+        `;
+
+        if (resumeContext) {
+          systemInstruction += `\n\nUser Resume Context:\n${resumeContext.text}\nSkills: ${resumeContext.skills.join(', ')}`;
+        }
+        
+        systemInstruction += `\n\nFocus on ${settings.mode} questions for a ${settings.targetRole} role. Preferred language: ${settings.codingLanguage}.`;
+
         const sessionPromise = client.live.connect({
           model: modelId,
           callbacks: {
@@ -174,7 +222,7 @@ export class GeminiService {
                  callbacks.onMessage(outputTranscription, false, false);
               }
 
-              // Handle Turn Complete (useful for finalizing state if needed)
+              // Handle Turn Complete
               const turnComplete = message.serverContent?.turnComplete;
               if (turnComplete) {
                  callbacks.onMessage(null, false, true);
@@ -186,9 +234,10 @@ export class GeminiService {
                 callbacks.onAudioData(audioData);
               }
             },
-            onerror: (e: ErrorEvent) => {
-              configService.logAction('LiveAPI', 'Connection error', 'error');
-              callbacks.onError(new Error("Live connection error"));
+            onerror: (e: any) => {
+              const msg = this.formatError(e);
+              configService.logAction('LiveAPI', `Connection error: ${msg}`, 'error');
+              callbacks.onError(new Error(msg));
             },
             onclose: () => {
               configService.logAction('LiveAPI', 'Session closed');
@@ -216,8 +265,9 @@ export class GeminiService {
 
         resolve({ sendAudio, disconnect });
 
-      } catch (err) {
-        reject(err);
+      } catch (err: any) {
+        const msg = this.formatError(err);
+        reject(new Error(msg));
       }
     });
   }
