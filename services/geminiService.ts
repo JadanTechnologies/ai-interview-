@@ -14,9 +14,7 @@ export class GeminiService {
       throw new Error("No active AI providers configured. Please contact Admin.");
     }
 
-    // Simple priority-based selection (Failover logic would try/catch in the actual call loop,
-    // but for connection setup, we return the highest priority one).
-    // In a production backend, we would loop through providers upon failure.
+    // Simple priority-based selection
     const primary = providers[0];
     
     // Log usage
@@ -140,15 +138,12 @@ export class GeminiService {
     disconnect: () => void;
   }> {
     
-    // Get Provider configuration
     const { client, modelId } = await this.getClient();
 
-    // Construct System Instruction
     let systemInstruction = `
       You are SmartInterview AI, a real-time interview copilot. 
       Your goal is to listen to the interview (user and interviewer) and help the user answer questions.
       Keep your responses concise and textual where possible, but you can speak if needed.
-      Ideally, you act as an inner voice or a heads-up display.
     `;
 
     if (resumeContext) {
@@ -178,8 +173,14 @@ export class GeminiService {
               if (outputTranscription) {
                  callbacks.onMessage(outputTranscription, false, false);
               }
+
+              // Handle Turn Complete (useful for finalizing state if needed)
+              const turnComplete = message.serverContent?.turnComplete;
+              if (turnComplete) {
+                 callbacks.onMessage(null, false, true);
+              }
               
-              // Handle Audio Output (if the model speaks)
+              // Handle Audio Output
               const audioData = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
               if (audioData) {
                 callbacks.onAudioData(audioData);

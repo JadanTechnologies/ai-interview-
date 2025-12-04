@@ -32,6 +32,7 @@ export interface SystemLog {
 // Safely retrieve API key or default to empty string
 const getEnvApiKey = () => {
   try {
+    // Check if process is defined (Node.js/simulated env) before accessing env
     if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
       return process.env.API_KEY;
     }
@@ -68,7 +69,13 @@ class ConfigService {
   private logs: SystemLog[];
 
   constructor() {
-    const storedProviders = localStorage.getItem('si_providers');
+    let storedProviders = null;
+    try {
+        storedProviders = localStorage.getItem('si_providers');
+    } catch(e) {
+        console.warn("LocalStorage access failed");
+    }
+
     this.providers = storedProviders ? JSON.parse(storedProviders) : DEFAULT_PROVIDERS;
     this.users = MOCK_USERS; // Mock for demo
     this.logs = [];
@@ -142,7 +149,11 @@ class ConfigService {
   }
 
   private persist() {
-    localStorage.setItem('si_providers', JSON.stringify(this.providers));
+    try {
+        localStorage.setItem('si_providers', JSON.stringify(this.providers));
+    } catch (e) {
+        console.warn("Failed to save to localStorage");
+    }
   }
 }
 
