@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Mic, Square, Monitor, AlertTriangle, WifiOff, XCircle, Play, Pause } from 'lucide-react';
+import { Mic, Square, Monitor, AlertTriangle, WifiOff, XCircle, Play, Pause, User, Bot, Clock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { geminiService } from '../services/geminiService';
 import { ResumeData, InterviewSettings, MessageType, ChatMessage } from '../types';
@@ -64,6 +64,20 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
             isPartial
         }];
     });
+  };
+
+  const finalizeLastMessage = (type: MessageType) => {
+      setMessages(prev => {
+          if (prev.length > 0 && prev[prev.length - 1].type === type) {
+              const newHistory = [...prev];
+              newHistory[newHistory.length - 1] = {
+                  ...newHistory[newHistory.length - 1],
+                  isPartial: false
+              };
+              return newHistory;
+          }
+          return prev;
+      });
   };
 
   const playAudioChunk = async (base64Data: string) => {
@@ -177,7 +191,11 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
             addMessage("Session connected. Listening...", MessageType.SYSTEM);
           },
           onMessage: (text, isUser, isComplete) => {
-             if(text) addMessage(text, isUser ? MessageType.USER : MessageType.AI, !isComplete);
+             if (text) {
+                 addMessage(text, isUser ? MessageType.USER : MessageType.AI, !isComplete);
+             } else if (isComplete) {
+                 finalizeLastMessage(MessageType.AI);
+             }
           },
           onAudioData: (base64) => {
              playAudioChunk(base64);
@@ -317,7 +335,7 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
       </div>
 
       {/* Main Chat / Transcription Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth">
         {messages.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center text-gray-500 opacity-50">
             <Monitor className="w-16 h-16 mb-4" />
@@ -327,13 +345,28 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
         )}
         
         {messages.map((msg) => (
-          <div key={msg.id} className={`flex flex-col ${msg.type === MessageType.USER ? 'items-end' : 'items-start'}`}>
-            <div className={`max-w-4xl w-full rounded-2xl p-5 ${
+          <div key={msg.id} className={`flex flex-col ${msg.type === MessageType.USER ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-2`}>
+            
+            {/* Message Metadata Header */}
+            {msg.type !== MessageType.SYSTEM && (
+                <div className={`flex items-center gap-2 mb-2 opacity-70 ${msg.type === MessageType.USER ? 'flex-row-reverse' : 'flex-row'}`}>
+                    {msg.type === MessageType.USER ? <User className="w-3 h-3 text-gray-400" /> : <Bot className="w-3 h-3 text-primary" />}
+                    <span className="text-[10px] font-mono text-gray-400 uppercase tracking-wider">{msg.type === MessageType.USER ? 'Candidate' : 'SmartInterview AI'}</span>
+                    <span className="text-[10px] text-dark-600">•</span>
+                    <span className="flex items-center gap-1 text-[10px] text-gray-500">
+                        <Clock className="w-3 h-3" />
+                        {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
+                    </span>
+                </div>
+            )}
+
+            {/* Message Bubble */}
+            <div className={`max-w-4xl w-full rounded-2xl p-5 transition-all ${
               msg.type === MessageType.USER 
-                ? 'bg-dark-700 text-gray-200 rounded-tr-none' 
+                ? 'bg-dark-700 text-gray-200 rounded-tr-none border border-dark-600' 
                 : msg.type === MessageType.SYSTEM 
-                  ? 'bg-blue-900/20 text-blue-400 border border-blue-900/50 text-xs text-center'
-                  : 'bg-gradient-to-br from-dark-800 to-dark-700 border border-dark-600 shadow-xl rounded-tl-none'
+                  ? 'bg-blue-900/10 text-blue-400 border border-blue-900/30 text-xs text-center self-center py-2 px-4 rounded-full max-w-lg'
+                  : 'bg-gradient-to-br from-dark-800 to-dark-750 border border-dark-600 shadow-xl rounded-tl-none'
             }`}>
               {msg.type === MessageType.AI ? (
                  <div className="prose prose-invert prose-p:text-sm prose-pre:bg-transparent prose-pre:p-0 prose-pre:m-0 max-w-none">
@@ -356,19 +389,21 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
                     >
                       {msg.content}
                     </ReactMarkdown>
+                    {msg.isPartial && <span className="inline-block w-2 h-4 bg-primary ml-1 animate-pulse align-middle" />}
                  </div>
               ) : (
-                 <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                 <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
               )}
             </div>
-            <span className="text-[10px] text-gray-600 mt-2 font-mono px-1">
-                {msg.type} • {new Date(msg.timestamp).toLocaleTimeString()}
-            </span>
           </div>
         ))}
         {isGeneratingText && (
-             <div className="flex items-start">
-                 <div className="bg-dark-800 p-4 rounded-xl border border-dark-700 animate-pulse">
+             <div className="flex flex-col items-start gap-2">
+                 <div className="flex items-center gap-2 opacity-70">
+                    <Bot className="w-3 h-3 text-primary" />
+                    <span className="text-[10px] font-mono text-gray-400 uppercase">AI THINKING</span>
+                 </div>
+                 <div className="bg-dark-800 p-4 rounded-xl border border-dark-700 animate-pulse rounded-tl-none w-64">
                      <div className="h-2 w-24 bg-dark-600 rounded mb-2"></div>
                      <div className="h-2 w-48 bg-dark-600 rounded"></div>
                  </div>
@@ -394,7 +429,7 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
       )}
 
       {/* Manual Input */}
-      <div className="p-4 bg-dark-800 border-t border-dark-700">
+      <div className="p-4 bg-dark-800 border-t border-dark-700 shadow-[0_-5px_20px_rgba(0,0,0,0.2)]">
         <div className="flex gap-2 max-w-4xl mx-auto">
             <input 
               type="text"
@@ -402,7 +437,7 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
               onChange={(e) => setManualInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleManualAsk()}
               placeholder="Type a technical question manually if audio misses..."
-              className="flex-1 bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary"
+              className="flex-1 bg-dark-900 border border-dark-600 rounded-lg px-4 py-3 text-sm text-gray-200 focus:outline-none focus:border-primary transition-colors placeholder:text-gray-600"
             />
             <Button onClick={handleManualAsk} disabled={!manualInput.trim() || isGeneratingText} variant="secondary">
                 Ask AI
