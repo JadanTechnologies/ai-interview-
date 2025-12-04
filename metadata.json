@@ -1,0 +1,7 @@
+{
+  "name": "SmartInterview AI",
+  "description": "A real-time AI interview assistant that listens to questions, provides instant answers based on your resume, and handles coding challenges live.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

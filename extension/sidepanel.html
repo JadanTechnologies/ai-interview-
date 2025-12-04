@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>SmartInterview Copilot</title>
+  <style>
+    body {
+      background: #0F1117;
+      color: #E6EDF3;
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid #30363D;
+      padding-bottom: 10px;
+    }
+    .logo {
+      color: #00D084;
+      font-weight: bold;
+    }
+    .btn {
+      width: 100%;
+      padding: 10px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 10px;
+    }
+    .btn-primary { background: #00D084; color: #000; }
+    .btn-danger { background: #ff4444; color: #fff; }
+    .btn-secondary { background: #21262D; color: #fff; border: 1px solid #30363D; }
+    
+    .transcript-box {
+      height: 300px;
+      overflow-y: auto;
+      background: #161B22;
+      border: 1px solid #30363D;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 13px;
+    }
+    .msg { margin-bottom: 8px; padding: 8px; border-radius: 6px; }
+    .msg.user { background: #21262D; text-align: right; }
+    .msg.ai { background: #1F2937; border-left: 2px solid #00D084; }
+    
+    input {
+      width: 100%;
+      background: #0F1117;
+      border: 1px solid #30363D;
+      padding: 8px;
+      color: white;
+      box-sizing: border-box;
+      margin-bottom: 8px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">SmartInterview AI</div>
+    <div style="font-size: 10px; opacity: 0.7">EXTENSION</div>
+  </div>
+
+  <div style="margin-bottom: 15px;">
+    <input type="password" id="apiKey" placeholder="Enter Gemini API Key" />
+    <button id="saveKey" class="btn btn-secondary" style="padding: 5px;">Save Key</button>
+  </div>
+
+  <button id="startBtn" class="btn btn-primary">Start Listening</button>
+  <button id="stopBtn" class="btn btn-danger" style="display: none;">Stop Session</button>
+
+  <div id="status" style="font-size: 11px; color: #888; margin: 5px 0;">Ready</div>
+
+  <div class="transcript-box" id="output">
+    <!-- Messages go here -->
+  </div>
+
+  <div style="margin-top: 15px;">
+    <button id="injectBtn" class="btn btn-secondary">Inject Last Answer</button>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

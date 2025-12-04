@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "SmartInterview AI Copilot",
+  "version": "1.0",
+  "description": "Real-time interview assistant for Zoom, Meet, and Teams.",
+  "permissions": [
+    "sidePanel",
+    "microphone",
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open Assistant"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
