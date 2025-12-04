@@ -10,10 +10,14 @@ interface CodeSolutionProps {
 export const CodeSolution: React.FC<CodeSolutionProps> = ({ code, language }) => {
   const [copied, setCopied] = React.useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy code to clipboard", err);
+    }
   };
 
   return (
@@ -22,9 +26,14 @@ export const CodeSolution: React.FC<CodeSolutionProps> = ({ code, language }) =>
         <span className="text-xs text-gray-400 font-mono uppercase">{language} Solution</span>
         <button 
           onClick={handleCopy}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors"
+          className={`flex items-center gap-1.5 text-xs transition-colors px-2 py-1 rounded ${
+            copied 
+              ? 'text-green-400 bg-green-500/10' 
+              : 'text-gray-400 hover:text-white hover:bg-white/5'
+          }`}
+          title="Copy to clipboard"
         >
-          {copied ? <Check className="w-3 h-3 text-primary" /> : <Copy className="w-3 h-3" />}
+          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
           {copied ? 'Copied' : 'Copy Code'}
         </button>
       </div>

@@ -1,4 +1,4 @@
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality, GenerateContentResponse } from "@google/genai";
 import { ResumeData, InterviewSettings } from "../types";
 import { createPcmBlob, fileToBase64 } from "./audioUtils";
 import { configService } from "./configService";
@@ -6,9 +6,11 @@ import { configService } from "./configService";
 export class GeminiService {
   private textModelId = 'gemini-2.5-flash';
 
-  // Helper to format errors into user-friendly messages
+  // Robust error formatting for UI
   private formatError(error: any): string {
     let msg = "An unexpected error occurred.";
+    let status = error.status || error.response?.status;
+
     if (typeof error === 'string') {
         msg = error;
     } else if (error instanceof Error) {
@@ -19,38 +21,70 @@ export class GeminiService {
 
     const lowerMsg = msg.toLowerCase();
 
-    // Rate Limits / Quota
-    if (lowerMsg.includes('429') || lowerMsg.includes('quota') || lowerMsg.includes('resource exhausted')) {
-      return "⚠️ API Rate limit exceeded. Please try again later or check your quota.";
+    // 1. Rate Limiting (429)
+    if (status === 429 || lowerMsg.includes('429') || lowerMsg.includes('quota') || lowerMsg.includes('resource exhausted')) {
+      return "⚠️ API Rate Limit Exceeded. The system is busy. Please wait a moment before trying again.";
     }
     
-    // Authentication
-    if (lowerMsg.includes('401') || lowerMsg.includes('403') || lowerMsg.includes('api key') || lowerMsg.includes('permission denied')) {
-      return "⚠️ Authentication failed. Please check your API Key configuration in Admin settings.";
+    // 2. Authentication (401/403)
+    if (status === 401 || status === 403 || lowerMsg.includes('401') || lowerMsg.includes('403') || lowerMsg.includes('api key') || lowerMsg.includes('permission denied')) {
+      return "⚠️ Authentication Failed. Please check that your API Key is valid and has access to the Gemini API.";
     }
     
-    // Server Errors
-    if (lowerMsg.includes('500') || lowerMsg.includes('502') || lowerMsg.includes('503') || lowerMsg.includes('internal error') || lowerMsg.includes('overloaded')) {
-      return "⚠️ AI Service is temporarily unavailable. Please try again in a moment.";
+    // 3. Server Errors (5xx)
+    if (status >= 500 || lowerMsg.includes('500') || lowerMsg.includes('503') || lowerMsg.includes('internal error') || lowerMsg.includes('overloaded')) {
+      return "⚠️ AI Service Unavailable. Google's servers are temporarily overloaded. Retrying might work.";
     }
     
-    // Network / Offline
-    if (lowerMsg.includes('fetch failed') || lowerMsg.includes('network') || lowerMsg.includes('failed to fetch') || lowerMsg.includes('offline')) {
-      return "⚠️ Network connection error. Please check your internet connection.";
+    // 4. Network / Offline
+    if (lowerMsg.includes('fetch failed') || lowerMsg.includes('network') || lowerMsg.includes('failed to fetch') || lowerMsg.includes('offline') || lowerMsg.includes('load failed')) {
+      return "⚠️ Network Connection Error. Please check your internet connection and try again.";
     }
 
-    // Safety / Blocked
+    // 5. Safety / Blocked Content
     if (lowerMsg.includes('safety') || lowerMsg.includes('blocked') || lowerMsg.includes('finishreason')) {
-      return "⚠️ Response was blocked by safety settings. Please modify your request.";
+      return "⚠️ Content Blocked. The AI refused to answer due to safety settings. Please rephrase your request.";
     }
 
-    // Configuration
-    if (lowerMsg.includes("no active ai providers") || lowerMsg.includes("active provider has no api key")) {
-        return msg;
+    // 6. Browser Compatibility
+    if (lowerMsg.includes('audiocontext') || lowerMsg.includes('mediadevices') || lowerMsg.includes('notallowederror')) {
+        return "⚠️ Hardware Access Error. Please ensure microphone permissions are granted and you are using a modern browser.";
     }
 
-    // Default cleanup
+    // 7. Generic Cleanup
     return `⚠️ ${msg.replace(/\[.*?\]/g, '').trim().slice(0, 150)}`;
+  }
+
+  // Retry wrapper for robust API calls (Exponential Backoff)
+  private async withRetry<T>(operation: () => Promise<T>, retries = 3): Promise<T> {
+    let lastError: any;
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await operation();
+      } catch (error: any) {
+        lastError = error;
+        const status = error.status || error.response?.status;
+        const msg = error.message?.toLowerCase() || '';
+        
+        // Retry only on transient errors (Network, 503, 429)
+        const isTransient = 
+            status === 503 || 
+            status === 429 || 
+            msg.includes('network') || 
+            msg.includes('fetch failed') || 
+            msg.includes('overloaded');
+
+        if (!isTransient || i === retries - 1) {
+            throw error;
+        }
+
+        // Backoff: 1s, 2s, 4s...
+        const delay = 1000 * Math.pow(2, i);
+        console.warn(`Attempt ${i + 1} failed. Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError;
   }
 
   // Helper to get a working client with failover
@@ -61,7 +95,6 @@ export class GeminiService {
       throw new Error("No active AI providers configured. Please go to Admin > Providers and add a valid API Key.");
     }
 
-    // Simple priority-based selection
     const primary = providers[0];
     
     if (!primary.apiKey || primary.apiKey.trim() === '') {
@@ -97,7 +130,8 @@ export class GeminiService {
           }
         `;
 
-        const response = await client.models.generateContent({
+        // Wrapped in retry logic
+        const response = await this.withRetry<GenerateContentResponse>(() => client.models.generateContent({
             model: this.textModelId,
             contents: {
             parts: [
@@ -108,7 +142,7 @@ export class GeminiService {
             config: {
             responseMimeType: 'application/json'
             }
-        });
+        }));
 
         let text = response.text;
         if (!text) throw new Error("Received empty response from Gemini");
@@ -166,10 +200,11 @@ export class GeminiService {
           Format with Markdown.
         `;
 
-        const response = await client.models.generateContent({
+        // Wrapped in retry logic
+        const response = await this.withRetry<GenerateContentResponse>(() => client.models.generateContent({
           model: this.textModelId,
           contents: prompt
-        });
+        }));
 
         configService.logAction('AI', 'Generated contextual answer');
         return response.text || "Could not generate answer.";
@@ -181,7 +216,6 @@ export class GeminiService {
     }
   }
 
-  // Live API Connection Manager
   async connectLive(
     callbacks: {
       onOpen: () => void;
@@ -197,7 +231,8 @@ export class GeminiService {
     disconnect: () => void;
   }> {
     
-    // We get client inside the promise to handle async errors in the rejection
+    // We return a promise that resolves once the session OBJECT is ready to be used.
+    // However, the actual connection is async.
     return new Promise(async (resolve, reject) => {
       try {
         const { client, modelId } = await this.getClient();
@@ -214,6 +249,7 @@ export class GeminiService {
         
         systemInstruction += `\n\nFocus on ${settings.mode} questions for a ${settings.targetRole} role. Preferred language: ${settings.codingLanguage}.`;
 
+        // Establish the session. We use the Promise to catch immediate config errors.
         const sessionPromise = client.live.connect({
           model: modelId,
           callbacks: {
@@ -268,13 +304,17 @@ export class GeminiService {
           }
         });
 
+        // Wrapper to send audio safely
         const sendAudio = (data: Float32Array) => {
             const pcmBlob = createPcmBlob(data);
-            sessionPromise.then(session => {
-                session.sendRealtimeInput({ media: pcmBlob });
-            }).catch(e => {
-                console.error("Failed to send audio", e);
-            });
+            sessionPromise
+                .then(session => {
+                    session.sendRealtimeInput({ media: pcmBlob });
+                })
+                .catch(e => {
+                    // This catches errors if the session failed to initialize but we tried to send data
+                    console.error("Failed to send audio - session not ready:", e);
+                });
         };
 
         const disconnect = () => {

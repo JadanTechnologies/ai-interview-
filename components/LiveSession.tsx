@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Mic, Square, Monitor, AlertTriangle } from 'lucide-react';
+import { Mic, Square, Monitor, AlertTriangle, WifiOff, XCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { geminiService } from '../services/geminiService';
 import { ResumeData, InterviewSettings, MessageType, ChatMessage } from '../types';
@@ -16,6 +16,7 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
   const [isActive, setIsActive] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isCriticalError, setIsCriticalError] = useState(false);
   
   // Audio Refs
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -64,13 +65,17 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
   };
 
   const playAudioChunk = async (base64Data: string) => {
-    if (!outputAudioCtxRef.current) {
-         // Fallback if not initialized in startSession (e.g. if message arrives late)
-        outputAudioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    }
-    const ctx = outputAudioCtxRef.current;
-
     try {
+        if (!outputAudioCtxRef.current) {
+             const AudioCtxClass = (window.AudioContext || (window as any).webkitAudioContext);
+             if (!AudioCtxClass) throw new Error("AudioContext not supported");
+             outputAudioCtxRef.current = new AudioCtxClass({ sampleRate: 24000 });
+        }
+        const ctx = outputAudioCtxRef.current;
+        if (ctx.state === 'suspended') {
+            await ctx.resume();
+        }
+
         const binaryString = atob(base64Data);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
@@ -103,27 +108,49 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
   const startSession = async () => {
     try {
       setError(null);
+      setIsCriticalError(false);
 
       if (!navigator.onLine) {
-        throw new Error("You appear to be offline. Please check your internet connection.");
+        throw new Error("NETWORK_OFFLINE");
       }
       
+      const AudioCtxClass = (window.AudioContext || (window as any).webkitAudioContext);
+      if (!AudioCtxClass) {
+        throw new Error("BROWSER_UNSUPPORTED");
+      }
+
       // Initialize output audio context immediately on user interaction to unlock autoplay
-      const outputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      const outputCtx = new AudioCtxClass({ sampleRate: 24000 });
       outputAudioCtxRef.current = outputCtx;
-      // Resume immediately in case it was suspended (Chrome policy)
+      
       if (outputCtx.state === 'suspended') {
         await outputCtx.resume();
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }});
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("BROWSER_UNSUPPORTED");
+      }
+
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }});
+      } catch (e: any) {
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+           throw new Error("MIC_PERMISSION_DENIED");
+        }
+        if (e.name === 'NotFoundError') {
+           throw new Error("MIC_NOT_FOUND");
+        }
+        throw e;
+      }
+      
       streamRef.current = stream;
 
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: PCM_SAMPLE_RATE });
+      const audioCtx = new AudioCtxClass({ sampleRate: PCM_SAMPLE_RATE });
       audioContextRef.current = audioCtx;
       
       const source = audioCtx.createMediaStreamSource(stream);
@@ -145,7 +172,8 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
              playAudioChunk(base64);
           },
           onError: (err) => {
-            setError(err.message);
+            setIsCriticalError(true);
+            setError(err.message); // This message comes from GeminiService formatError
             stopSession();
           },
           onClose: () => {
@@ -173,18 +201,24 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
     } catch (err: any) {
       console.error(err);
       
-      let msg = err.message;
-      // Handle microphone permission errors specifically
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          msg = "Microphone access denied. Please allow microphone access in your browser settings.";
-      } else if (err.name === 'NotFoundError') {
-          msg = "No microphone found on this device.";
-      } else if (err.name === 'NotReadableError') {
-          msg = "Microphone is busy or not readable. Close other apps using it.";
+      let msg = err.message || "Failed to start session.";
+      let critical = true;
+
+      // Map internal error codes to user-friendly UI messages
+      if (msg === "NETWORK_OFFLINE") {
+          msg = "You are offline. Please check your internet connection.";
+          critical = false;
+      } else if (msg === "BROWSER_UNSUPPORTED") {
+          msg = "Your browser does not support required features. Please use Chrome, Edge, or Firefox.";
+      } else if (msg === "MIC_PERMISSION_DENIED") {
+          msg = "Microphone access was denied. Please allow microphone access in your browser settings (look for the lock icon in the address bar).";
+      } else if (msg === "MIC_NOT_FOUND") {
+          msg = "No microphone detected. Please connect a microphone and try again.";
       }
       
+      setIsCriticalError(critical);
       setError(msg);
-      stopSession(); // Ensure cleanup happens
+      stopSession();
     }
   };
 
@@ -215,6 +249,7 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
     const q = manualInput;
     setManualInput('');
     addMessage(q, MessageType.USER);
+    setError(null);
     
     if (resume) {
         setIsGeneratingText(true);
@@ -222,7 +257,6 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
             const ans = await geminiService.generateContextualAnswer(q, resume, settings);
             addMessage(ans, MessageType.AI);
         } catch(e: any) {
-            addMessage(`System: ${e.message}`, MessageType.SYSTEM);
             setError(e.message);
         } finally {
             setIsGeneratingText(false);
@@ -233,7 +267,7 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
   };
 
   return (
-    <div className="flex flex-col h-full bg-dark-900">
+    <div className="flex flex-col h-full bg-dark-900 relative">
       {/* Header / HUD */}
       <div className="flex items-center justify-between p-4 border-b border-dark-700 bg-dark-800/50 backdrop-blur-sm sticky top-0 z-10">
         <div className="flex items-center gap-4">
@@ -317,11 +351,19 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Error Display */}
+      {/* Robust Error Display */}
       {error && (
-        <div className="bg-red-500/10 border-t border-red-500/20 p-3 flex items-center justify-center gap-2 text-red-400 text-sm animate-in slide-in-from-bottom-2">
-          <AlertTriangle className="w-4 h-4" />
-          {error}
+        <div className={`absolute bottom-20 left-4 right-4 md:left-auto md:right-6 md:w-96 p-4 flex items-start gap-3 text-sm animate-in slide-in-from-bottom-5 shadow-2xl rounded-xl border z-20 ${
+            isCriticalError ? 'bg-dark-800/95 border-red-500/50 text-red-300' : 'bg-dark-800/95 border-yellow-500/50 text-yellow-300'
+        }`}>
+          {isCriticalError ? <XCircle className="w-5 h-5 shrink-0 mt-0.5 text-red-500" /> : <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-yellow-500" />}
+          <div className="flex-1">
+            <span className="font-bold block mb-1 text-white">{isCriticalError ? 'Error' : 'Warning'}</span>
+            <span className="leading-relaxed">{error}</span>
+          </div>
+          <button onClick={() => setError(null)} className="ml-auto text-xs bg-white/5 px-2 py-1 rounded hover:bg-white/10 transition-colors">
+            Dismiss
+          </button>
         </div>
       )}
 
