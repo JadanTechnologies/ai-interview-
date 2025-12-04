@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Mic, Square, Monitor, AlertTriangle, WifiOff, XCircle } from 'lucide-react';
+import { Mic, Square, Monitor, AlertTriangle, WifiOff, XCircle, Play, Pause } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { geminiService } from '../services/geminiService';
 import { ResumeData, InterviewSettings, MessageType, ChatMessage } from '../types';
@@ -14,6 +14,7 @@ interface LiveSessionProps {
 
 export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) => {
   const [isActive, setIsActive] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isCriticalError, setIsCriticalError] = useState(false);
@@ -29,6 +30,7 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
   // Service Refs
   const sendAudioRef = useRef<((data: Float32Array) => void) | null>(null);
   const disconnectRef = useRef<(() => void) | null>(null);
+  const isPausedRef = useRef(false);
 
   // Auto-scroll
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -105,10 +107,19 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
     }
   };
 
+  const togglePause = () => {
+    const newState = !isPaused;
+    setIsPaused(newState);
+    isPausedRef.current = newState;
+    addMessage(newState ? "Microphone paused." : "Microphone resumed.", MessageType.SYSTEM);
+  };
+
   const startSession = async () => {
     try {
       setError(null);
       setIsCriticalError(false);
+      setIsPaused(false);
+      isPausedRef.current = false;
 
       if (!navigator.onLine) {
         throw new Error("NETWORK_OFFLINE");
@@ -189,6 +200,9 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
       disconnectRef.current = connection.disconnect;
 
       processor.onaudioprocess = (e) => {
+        // Check if paused before processing
+        if (isPausedRef.current) return;
+
         const inputData = e.inputBuffer.getChannelData(0);
         if (sendAudioRef.current) {
             sendAudioRef.current(inputData);
@@ -237,6 +251,8 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
     }
     
     setIsActive(false);
+    setIsPaused(false);
+    isPausedRef.current = false;
     sendAudioRef.current = null;
     processorRef.current = null;
   };
@@ -271,9 +287,9 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
       {/* Header / HUD */}
       <div className="flex items-center justify-between p-4 border-b border-dark-700 bg-dark-800/50 backdrop-blur-sm sticky top-0 z-10">
         <div className="flex items-center gap-4">
-          <div className={`w-3 h-3 rounded-full ${isActive ? 'bg-red-500 animate-pulse' : 'bg-gray-600'}`} />
+          <div className={`w-3 h-3 rounded-full ${isActive ? (isPaused ? 'bg-yellow-500' : 'bg-red-500 animate-pulse') : 'bg-gray-600'}`} />
           <span className="font-mono text-sm text-gray-400">
-            {isActive ? 'LIVE LISTENING' : 'STANDBY'}
+            {isActive ? (isPaused ? 'SESSION PAUSED' : 'LIVE LISTENING') : 'STANDBY'}
           </span>
         </div>
         
@@ -283,9 +299,19 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
                <Mic className="w-4 h-4" /> Start Interview Mode
              </Button>
            ) : (
-             <Button onClick={stopSession} variant="danger" className="flex gap-2">
-               <Square className="w-4 h-4" /> Stop Session
-             </Button>
+             <div className="flex items-center gap-2">
+                <Button 
+                    onClick={togglePause} 
+                    variant="secondary" 
+                    className={`flex gap-2 ${isPaused ? 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10' : ''}`}
+                >
+                    {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                    {isPaused ? "Resume" : "Pause"}
+                </Button>
+                <Button onClick={stopSession} variant="danger" className="flex gap-2">
+                    <Square className="w-4 h-4" /> Stop
+                </Button>
+             </div>
            )}
         </div>
       </div>
