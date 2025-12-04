@@ -8,7 +8,15 @@ export class GeminiService {
 
   // Helper to format errors into user-friendly messages
   private formatError(error: any): string {
-    let msg = error instanceof Error ? error.message : String(error);
+    let msg = "An unexpected error occurred.";
+    if (typeof error === 'string') {
+        msg = error;
+    } else if (error instanceof Error) {
+        msg = error.message;
+    } else if (error && typeof error === 'object') {
+        msg = error.message || error.statusText || JSON.stringify(error);
+    }
+
     const lowerMsg = msg.toLowerCase();
 
     // Rate Limits / Quota
@@ -18,7 +26,7 @@ export class GeminiService {
     
     // Authentication
     if (lowerMsg.includes('401') || lowerMsg.includes('403') || lowerMsg.includes('api key') || lowerMsg.includes('permission denied')) {
-      return "⚠️ Authentication failed. Please check your API Key configuration.";
+      return "⚠️ Authentication failed. Please check your API Key configuration in Admin settings.";
     }
     
     // Server Errors
@@ -27,7 +35,7 @@ export class GeminiService {
     }
     
     // Network / Offline
-    if (lowerMsg.includes('fetch failed') || lowerMsg.includes('network') || lowerMsg.includes('failed to fetch')) {
+    if (lowerMsg.includes('fetch failed') || lowerMsg.includes('network') || lowerMsg.includes('failed to fetch') || lowerMsg.includes('offline')) {
       return "⚠️ Network connection error. Please check your internet connection.";
     }
 
@@ -36,25 +44,29 @@ export class GeminiService {
       return "⚠️ Response was blocked by safety settings. Please modify your request.";
     }
 
-    // Internal "No providers" error
-    if (msg.includes("No active AI providers")) {
+    // Configuration
+    if (lowerMsg.includes("no active ai providers") || lowerMsg.includes("active provider has no api key")) {
         return msg;
     }
 
     // Default cleanup
-    return msg.replace(/\[.*?\]/g, '').trim() || "An unexpected error occurred.";
+    return `⚠️ ${msg.replace(/\[.*?\]/g, '').trim().slice(0, 150)}`;
   }
 
   // Helper to get a working client with failover
   private async getClient(): Promise<{ client: GoogleGenAI, modelId: string }> {
     const providers = configService.getActiveProviders();
     
-    if (providers.length === 0) {
-      throw new Error("No active AI providers configured. Please contact Admin.");
+    if (!providers || providers.length === 0) {
+      throw new Error("No active AI providers configured. Please go to Admin > Providers and add a valid API Key.");
     }
 
     // Simple priority-based selection
     const primary = providers[0];
+    
+    if (!primary.apiKey || primary.apiKey.trim() === '') {
+        throw new Error("The active provider has no API Key. Please check your configuration.");
+    }
     
     // Log usage
     primary.usageCount++;
@@ -210,28 +222,32 @@ export class GeminiService {
               callbacks.onOpen();
             },
             onmessage: (message: LiveServerMessage) => {
-              // Handle User Input Transcription
-              const inputTranscription = message.serverContent?.inputTranscription?.text;
-              if (inputTranscription) {
-                 callbacks.onMessage(inputTranscription, true, false);
-              }
+              try {
+                  // Handle User Input Transcription
+                  const inputTranscription = message.serverContent?.inputTranscription?.text;
+                  if (inputTranscription) {
+                     callbacks.onMessage(inputTranscription, true, false);
+                  }
 
-              // Handle Model Output Transcription
-              const outputTranscription = message.serverContent?.outputTranscription?.text;
-              if (outputTranscription) {
-                 callbacks.onMessage(outputTranscription, false, false);
-              }
+                  // Handle Model Output Transcription
+                  const outputTranscription = message.serverContent?.outputTranscription?.text;
+                  if (outputTranscription) {
+                     callbacks.onMessage(outputTranscription, false, false);
+                  }
 
-              // Handle Turn Complete
-              const turnComplete = message.serverContent?.turnComplete;
-              if (turnComplete) {
-                 callbacks.onMessage(null, false, true);
-              }
-              
-              // Handle Audio Output
-              const audioData = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-              if (audioData) {
-                callbacks.onAudioData(audioData);
+                  // Handle Turn Complete
+                  const turnComplete = message.serverContent?.turnComplete;
+                  if (turnComplete) {
+                     callbacks.onMessage(null, false, true);
+                  }
+                  
+                  // Handle Audio Output
+                  const audioData = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                  if (audioData) {
+                    callbacks.onAudioData(audioData);
+                  }
+              } catch (e) {
+                  console.error("Error processing message:", e);
               }
             },
             onerror: (e: any) => {
@@ -256,11 +272,13 @@ export class GeminiService {
             const pcmBlob = createPcmBlob(data);
             sessionPromise.then(session => {
                 session.sendRealtimeInput({ media: pcmBlob });
+            }).catch(e => {
+                console.error("Failed to send audio", e);
             });
         };
 
         const disconnect = () => {
-            sessionPromise.then(session => session.close());
+            sessionPromise.then(session => session.close()).catch(() => {});
         };
 
         resolve({ sendAudio, disconnect });

@@ -103,6 +103,10 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
   const startSession = async () => {
     try {
       setError(null);
+
+      if (!navigator.onLine) {
+        throw new Error("You appear to be offline. Please check your internet connection.");
+      }
       
       // Initialize output audio context immediately on user interaction to unlock autoplay
       const outputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -175,6 +179,8 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
           msg = "Microphone access denied. Please allow microphone access in your browser settings.";
       } else if (err.name === 'NotFoundError') {
           msg = "No microphone found on this device.";
+      } else if (err.name === 'NotReadableError') {
+          msg = "Microphone is busy or not readable. Close other apps using it.";
       }
       
       setError(msg);
@@ -217,6 +223,7 @@ export const LiveSession: React.FC<LiveSessionProps> = ({ resume, settings }) =>
             addMessage(ans, MessageType.AI);
         } catch(e: any) {
             addMessage(`System: ${e.message}`, MessageType.SYSTEM);
+            setError(e.message);
         } finally {
             setIsGeneratingText(false);
         }
